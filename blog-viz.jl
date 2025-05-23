@@ -6,174 +6,182 @@ using WordCloud
 using Images
 using CairoMakie
 using CairoMakie: Axis
-using Git
+using HTTP
+using EzXML
+using ProgressMeter
 
-const ASSET_DIR = joinpath(@__DIR__, "..", "assets")
-const SITE_ROOT = joinpath(@__DIR__, "..", "..", "..")
-const BLOG_DIR = joinpath(SITE_ROOT, "blog")
-const git = Git.git()
+# Intentionally structured as a script rather than a library with 
+# a user-friendly main entrypoint. Need to make changes for your site? 
+# Alter the script directly! :D 
 
-function process_md(path)
-    yaml_dict = YAML.load_file(path)
-    date = yaml_dict["created"]
-    date_pretty = let
-        Dates.format(Date(string(date)), dateformat"d u yyyy")
-    end
+#####
+##### Some helper functions! For data munging
+#####
 
-    tags = join(yaml_dict["tags"], " ")
-
-    contents = let
-        lines = readlines(replace(path, "src.md" => "index.html"))
-
-        # remove header and footer
-        i = findfirst(contains("</h1>"), lines)
-        lines = lines[(i + 2):end]
-        i = findlast(contains("<ul class=\"date\">"), lines)
-        lines = lines[1:(i - 1)]
-
-        c = join(lines, " ")
-        c = replace(c, "\n" => " ")
-        html2text(c)
-    end
-    wordcount = length(contents)
-    footnotecount = length(collect(eachmatch(r"↩︎", contents)))
-    return (; contents, wordcount, footnotecount, tags, date, date_pretty,
-            name=basename(dirname(path)))
+function fetch_data(item)
+    response = HTTP.get(item.link)
+    return String(response.body)
 end
 
-# 1. Collect all the metadata from each markdown post 
-src_files = filter!(isfile, joinpath.(readdir(BLOG_DIR; join=true), "src.md"))
-md_files = map(process_md, src_files)
+function default_date_conversion(date_str::String)
+    str = date_str[1:end-4] # Chop off time zone 
+    return Date(str, dateformat"eee, dd uu yyyy HH:MM:SS")
+end
 
-# 2. Create a word cloud for each post 
-function wordcloud_from_post(words, id; asset_dir=ASSET_DIR)
+function process_item(item;
+    html_preprocess=(html::String) -> html,
+    date_process=default_date_conversion)
+    # Get contents of post 
+    raw_html = fetch_data(item)
+    html = html_preprocess(raw_html)
+    contents = html2text(html)
+
+    # Metadata used later (doesn't need to happen here, but whatevs)
+    date = date_process(item.pubDate)
+    return (; contents, date)
+end
+
+function default_html_preprocess(html)
+    lines = split(html, "\n")
+
+    # remove header and footer
+    # very brittle, designed around specific site (hannahilea.com) entries 
+    # so content *starts* after the </h1> entry (i.e., just after the title)
+    i = findfirst(contains("</h1>"), lines)
+    lines = lines[(i+2):end]
+
+    # ...and ends just before some constant footer content
+    i = findlast(contains("<ul class=\"date\">"), lines)
+    lines = lines[1:(i-1)]
+
+    # Reformat it back similar to the input
+    c = join(lines, " ")
+    c = replace(c, "\n" => " ")
+    return c
+end
+
+
+#####
+##### Helper functions for plotting!
+#####
+
+function wordcloud_from_post(words, output_filepath)
     wc = paintcloud(words;
-                    mask=shape(box, 500, 400; cornerradius=2),
-                    masksize=:original,
-                    colors=["#000080"],
-                    backgroundcolor="linen",
-                    angles=(0, 45, 90),
-                    fonts=["Tahoma"],
-                    density=0.7,
-                    maxnum=500)
-    save(joinpath(asset_dir, "wc-$(id).png"), wc)
+        mask=shape(box, 500, 400; cornerradius=2),
+        masksize=:original,
+        colors=["#000080"],
+        backgroundcolor="linen",
+        angles=(0, 45, 90),
+        fonts=["Tahoma"],
+        density=0.7,
+        maxnum=500)
+    mkpath(dirname(output_filepath))
+    save(output_filepath, wc)
     return wc
 end
 
-sort!(md_files; by=x -> x.date)
-for (i, f) in enumerate(md_files)
-    @info f.name
-    wordcloud_from_post(f.contents, "$i-$(f.name)")
+#####
+##### Script entrypoint
+#####
+
+url = Base.prompt("Enter the url for your RSS feed"; default="https://hannahilea.com/rss")
+
+@info "Fetching and parsing `$url`..."
+xml_doc = let
+    response = HTTP.get(url)
+    content = String(response.body)
+    xml = parsexml(content)
+    root(xml)
 end
-wordcloud_from_post(join(f.contents for f in md_files), "combo")
 
-# 3. Make some more plots!
-ys = [length(f.contents) for f in md_files]
+@info "Pulling blog details out of rss feed xml"
+items = map(findall("//item", xml_doc)) do item
+    # Convert xml item to list of NamedTuples per item
+    return NamedTuple(map(elements(item)) do element
+        return (Symbol(element.name), element.content)
+    end)
+end
 
-# okay this is dumb, but it seems like makie and date-based axes don't play 
-# nice? so do the dumb thing.
-daily = collect(Date(2024, 5, 1):Day(1):Date(2025, 6, 1))
-xs = [findfirst(==(f.date), daily) for f in md_files]
-monthly = collect(Date(2024, 5, 1):Month(1):Date(2025, 6, 1))
-monthly_ticks = [findfirst(==(m), daily) for m in monthly]
+@info "...and validating entries"
+for (i, item) in enumerate(items)
+    haskey(item, :pubDate) || @warn "No `pubDate` found for item $i; will likely fail downstream steps. Fix or remove item."
+    haskey(item, :link) || @warn "No `link` found for item $i; will likely fail downstream steps. Fix or remove item."
+end
 
-function ytickformat(values)
-    map(values) do value
-        value == 0 && return "0"
-        # This is dumb but I'm sick of fighting it
-        value % 1000 == 0 && return "$(Int(value/1000))k"
-        return "$(value/1000)k"
+@info "Fetching blog content..."
+fetched_items = @showprogress desc = "" map(items) do item
+    return process_item(item;
+        html_preprocess=identity,
+        date_process=default_date_conversion)
+end
+
+@info "Plot time!"
+output_dir = Base.prompt("Where do you want output images saved?"; default=joinpath(".", "viz-output-$(now())"))
+
+@info "Generating per-post word clouds..."
+@showprogress for (i, item) in enumerate(sort(fetched_items; by=x -> x.date))
+    wordcloud_from_post(item.contents, joinpath(output_dir, "wc-$i.png"))
+end
+
+@info "Make all-post word cloud..."
+all_words = join([item.contents for item in fetched_items], " ")
+wordcloud_from_post(all_words, joinpath(output_dir, "wc-all.png"))
+
+
+@info "Make post timeline plot..."
+
+function make_timeline_plot(dates, values, output_filepath;
+    title="",
+    ylabel="Word count",
+    figsize=(800, 300))
+
+    # okay this is dumb, but it seems like makie and date-based axes don't play 
+    # nice? so do the dumb thing---i.e., manually index the dates
+    min_day, max_day = extrema(dates)
+    first_month_day = floor(min_day, Month(1))
+    last_month_day = ceil(max_day, Month(1))
+    daily = collect(first_month_day:Day(1):last_month_day)
+    xs = [findfirst(==(d), daily) for d in dates]
+
+    # Prepare x-axis labels
+    monthly_dates = first_month_day:Month(1):last_month_day
+    monthly_ticks = [findfirst(==(m), daily) for m in monthly_dates]
+    monthly_labels = map(enumerate(monthly_dates)) do (i, d)
+        m = monthabbr(d)
+        if m == "Jan" || i == 1
+            str = "$(year(d)) $m"
+            return "'" * str[3:end]
+        end
+        return m
     end
+
+    ytickformat = (values) -> begin
+        map(values) do value
+            value == 0 && return "0"
+            # This is dumb but I'm sick of fighting it
+            value % 1000 == 0 && return "$(Int(value/1000))k"
+            return "$(value/1000)k"
+        end
+    end
+
+    f = Figure(; size=figsize)
+    ax = Axis(f[1, 1];
+        title, ylabel,
+        xlabel="Publication date",
+        ytickformat,
+        xticks=(monthly_ticks, monthly_labels),
+        xticklabelrotation=0.3)
+    barplot!(ax, xs, values;
+        strokewidth=0.5,
+        strokecolor=:white,
+        width=3,
+        color="#000080",)
+    save(output_filepath, f)
+    return f
 end
 
-monthly_labels = map(monthly) do date
-    m = monthabbr(date)
-    m != "May" && return m
-    str = "$(year(date)) $m"
-    return "'" * str[3:end]
-end
+per_post_dates = [f.date for f in fetched_items]
+per_post_counts = [length(f.contents) for f in fetched_items]
 
-f = Figure(; size=(800, 300))
-ax = Axis(f[1, 1];
-          title="A year of @hannahilea blog posts",
-          ylabel="Word count",
-          xlabel="Publication date",
-          ytickformat,
-          xticks=(monthly_ticks, monthly_labels),
-          xticklabelrotation=0.3)
-barplot!(ax, xs, ys;
-         strokewidth=0.5,
-         strokecolor=:white,
-         width=3,
-         color="#000080",);
-save(joinpath(ASSET_DIR, "timeline.png"), f)
-
-# 4. Make a wordcloud chart for tags 
-tags = let
-    t = split(join((f.tags for f in md_files), " "), " ")
-    # WordCloud.jl is goofy about plurals, and treats .js like a plural 
-    # I don't have time to fix it at the source, so here's a workaround
-    map(x -> x == "p5.js" ? "'p5.js'" : x, t)
-end
-wc = paintcloud(tags;
-                mask=shape(box, 500, 300; cornerradius=2),
-                masksize=:original,
-                colors=:rainbow,
-                backgroundcolor="linen",
-                angles=(0),
-                fonts=["Tahoma"])
-save(joinpath(ASSET_DIR, "wc-tags.png"), wc)
-
-# 5. Make a plot based on git commits 
-# ...not actually sharing this one because I don't love the styling and don't have 
-# additional interesting narrative around it.
-
-logs = split(chomp(read(`$git log main --date=short --pretty='format:%ad %s' --since="2024-05-01"`,
-                        String)), "\n")
-commits = map(logs) do log
-    return date_str, subj = split(log, " "; limit=2)
-end
-
-# We're using the same daily and monthly info as the above plot!
-commit_xs = [findfirst(==(first(c)), string.(daily)) for c in commits]
-commit_ys = [1 for _ in commit_xs]
-
-f = Figure(; size=(800, 150))
-ax = Axis(f[1, 1];
-          title="Timeline of www.hannahilea.com changes",
-          xlabel="Contribution date",
-          xticks=(monthly_ticks, monthly_labels),
-          xticklabelrotation=0.3)
-hideydecorations!(ax)
-
-vlines!(ax, commit_xs;
-        color="#000080", label="Contribution");
-vlines!(ax, xs;
-        color=:tomato,
-        label="Publish");
-# save(joinpath(ASSET_DIR, "timeline-multi.png"), f);
-
-# 6. Some stats 
-for f in sort(md_files; by=x -> x.wordcount)
-    @info f.wordcount f.name
-end
-
-footnotes = [length(collect(eachmatch(r"↩︎", f.contents))) for f in md_files]
-
-for f in sort(md_files; by=x -> x.footnotecount)
-    @info f.footnotecount f.name
-end
-
-@info "Total words: $(sum(x -> x.wordcount, md_files))"
-
-all_content = join((f.contents for f in md_files), " ")
-ex_count = length(collect(eachmatch(r"!", all_content)))
-per_count = length(collect(eachmatch(r".", all_content)))
-@info "Punctiation:" ex_count per_count ratio = (per_count / ex_count)
-
-for f in sort(md_files; by=x -> x.date)
-    ratio = Int(round(length(collect(eachmatch(r".", f.contents))) /
-                      length(collect(eachmatch(r"!", f.contents)))))
-    # @info f.date_pretty ratio f.name
-    println(ratio)
-end
+make_timeline_plot(per_post_dates, per_post_counts,
+    joinpath(output_dir, "timeline.png"))
