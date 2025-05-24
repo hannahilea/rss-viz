@@ -65,7 +65,7 @@ end
 ##### Helper functions for plotting!
 #####
 
-function wordcloud_from_post(words, output_filepath)
+function wordcloud_from_post(words, output_filepath; kwargs...)
     wc = paintcloud(words;
         mask=shape(box, 500, 400; cornerradius=2),
         masksize=:original,
@@ -74,7 +74,8 @@ function wordcloud_from_post(words, output_filepath)
         angles=(0, 45, 90),
         fonts=["Tahoma"],
         density=0.7,
-        maxnum=500)
+        maxnum=500,
+        kwargs...)
     mkpath(dirname(output_filepath))
     save(output_filepath, wc)
     return wc
@@ -125,7 +126,7 @@ end
 
 @info "Make all-post word cloud..."
 all_words = join([item.contents for item in fetched_items], " ")
-wordcloud_from_post(all_words, joinpath(output_dir, "wc-all.png"))
+wordcloud_from_post(all_words, joinpath(output_dir, "wc-all.png"); colors=:Spectral_10)
 
 
 @info "Make post timeline plot..."

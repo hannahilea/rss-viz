@@ -19,3 +19,9 @@ TODO
 There are lots of customization options to, e.g., word cloud generation and custom header/footer removal and plot size; this script is scrappy enough that you'd be better off changing the code directly! Assume that this is *not* a beautifully engineered library that nicely inverts control to the caller. 😅
 
 Oh, and if you want some examples of wordcloud customizations supported by WordCloud.jl library used here, there's a [gallery](https://github.com/guo-yong-zhi/WordCloud-Gallery/blob/main/README.md).
+To see the list of available color mappings, do 
+```
+using WordCloud
+using ImageInTerminal
+WordCloud.displayschemes()
+```
