@@ -24,8 +24,8 @@ function fetch_data(item)
 end
 
 function default_date_conversion(date_str::String)
-    str = date_str[1:end-4] # Chop off time zone 
-    return Date(str, dateformat"eee, dd uu yyyy HH:MM:SS")
+    str = date_str[1:16] # Chop off time zone 
+    return Date(str, dateformat"eee, dd uuu yyyy HH:MM:SS")
 end
 
 function process_item(item;
@@ -40,7 +40,7 @@ function process_item(item;
     date = date_process(item.pubDate)
     return (; contents, date)
 end
-
+""
 function default_html_preprocess(html)
     lines = split(html, "\n")
 
@@ -171,7 +171,7 @@ function make_timeline_plot(dates, values, output_filepath;
         xlabel="Publication date",
         ytickformat,
         xticks=(monthly_ticks, monthly_labels),
-        xticklabelrotation=0.3)
+        xticklabelrotation=0.4)
     barplot!(ax, xs, values;
         strokewidth=0.5,
         strokecolor=:white,
@@ -185,4 +185,4 @@ per_post_dates = [f.date for f in fetched_items]
 per_post_counts = [length(f.contents) for f in fetched_items]
 
 make_timeline_plot(per_post_dates, per_post_counts,
-    joinpath(output_dir, "timeline.png"))
+    joinpath(output_dir, "timeline.png"); title="Posts to `$url`")
