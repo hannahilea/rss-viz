@@ -1,5 +1,9 @@
 # rss-viz
-[<img alt="Static Badge" src="https://img.shields.io/badge/%F0%9F%AA%B4%20Houseplant%20-x?style=flat&amp;label=Project%20type&amp;color=1E1E1D">]("https://www.hannahilea.com/blog/houseplant-programming")
+[<img alt="Static Badge" src="https://img.shields.io/badge/%F0%9F%AA%B4%20Houseplant%20-x?style=flat&amp;label=Project%20type&amp;color=1E1E1D">](https://www.hannahilea.com/blog/houseplant-programming)
+[<img alt="Static Badge" src="https://img.shields.io/badge/%F0%9F%8F%B3%EF%B8%8F%E2%80%8D%F0%9F%8C%88%20Gay%20Agenda%20License%201.0%20%F0%9F%8F%B3%EF%B8%8F%E2%80%8D%E2%9A%A7%EF%B8%8F-x?style=flat&amp;label=License&amp;color=FDF2F8">](./LICENSE.md)
+
+
+
 
 Scrappy script for generating analysis plots of the type in [this post](https://hannahilea.com/blog/blog-birthday-1/), taking an RSS feed as input.
 
