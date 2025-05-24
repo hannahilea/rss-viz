@@ -81,56 +81,6 @@ function wordcloud_from_post(words, output_filepath; kwargs...)
     return wc
 end
 
-#####
-##### Script entrypoint
-#####
-
-url = Base.prompt("Enter the url for your RSS feed"; default="https://hannahilea.com/rss")
-
-@info "Fetching and parsing `$url`..."
-xml_doc = let
-    response = HTTP.get(url)
-    content = String(response.body)
-    xml = parsexml(content)
-    root(xml)
-end
-
-@info "Pulling blog details out of rss feed xml"
-items = map(findall("//item", xml_doc)) do item
-    # Convert xml item to list of NamedTuples per item
-    return NamedTuple(map(elements(item)) do element
-        return (Symbol(element.name), element.content)
-    end)
-end
-
-@info "...and validating entries"
-for (i, item) in enumerate(items)
-    haskey(item, :pubDate) || @warn "No `pubDate` found for item $i; will likely fail downstream steps. Fix or remove item."
-    haskey(item, :link) || @warn "No `link` found for item $i; will likely fail downstream steps. Fix or remove item."
-end
-
-@info "Fetching blog content..."
-fetched_items = @showprogress desc = "" map(items) do item
-    return process_item(item;
-        html_preprocess=identity,
-        date_process=default_date_conversion)
-end
-
-@info "Plot time!"
-output_dir = Base.prompt("Where do you want output images saved?"; default=joinpath(".", "viz-output-$(now())"))
-
-@info "Generating per-post word clouds..."
-@showprogress for (i, item) in enumerate(sort(fetched_items; by=x -> x.date))
-    wordcloud_from_post(item.contents, joinpath(output_dir, "wc-$i.png"))
-end
-
-@info "Make all-post word cloud..."
-all_words = join([item.contents for item in fetched_items], " ")
-wordcloud_from_post(all_words, joinpath(output_dir, "wc-all.png"); colors=:Spectral_10)
-
-
-@info "Make post timeline plot..."
-
 function make_timeline_plot(dates, values, output_filepath;
     title="",
     ylabel="Word count",
@@ -177,12 +127,66 @@ function make_timeline_plot(dates, values, output_filepath;
         strokecolor=:white,
         width=3,
         color="#000080",)
+    mkpath(dirname(output_filepath))
     save(output_filepath, f)
     return f
 end
 
+#####
+##### Script entrypoint
+#####
+
+url = Base.prompt("Enter the url for your RSS feed"; default="https://hannahilea.com/rss")
+
+@info "Fetching and parsing `$url`..."
+xml_doc = let
+    response = HTTP.get(url)
+    content = String(response.body)
+    xml = parsexml(content)
+    root(xml)
+end
+
+@info "Pulling blog details out of rss feed xml"
+items = map(findall("//item", xml_doc)) do item
+    # Convert xml item to list of NamedTuples per item
+    return NamedTuple(map(elements(item)) do element
+        return (Symbol(element.name), element.content)
+    end)
+end
+
+@info "...and validating all $(length(items)) entries."
+for (i, item) in enumerate(items)
+    haskey(item, :pubDate) || @warn "No `pubDate` found for item $i; will likely fail downstream steps. Fix or remove item."
+    haskey(item, :link) || @warn "No `link` found for item $i; will likely fail downstream steps. Fix or remove item."
+end
+
+@info "Fetching blog content..."
+fetched_items = @showprogress desc = "" map(items) do item
+    return process_item(item;
+        html_preprocess=identity,
+        date_process=default_date_conversion)
+end
+
+@info "Plot time!"
+output_dir = Base.prompt("Where do you want output images saved?"; default=joinpath(".", "viz-output-$(now())"))
+
+@info "Make post timeline plot..."
 per_post_dates = [f.date for f in fetched_items]
 per_post_counts = [length(f.contents) for f in fetched_items]
-
 make_timeline_plot(per_post_dates, per_post_counts,
-    joinpath(output_dir, "timeline.png"); title="Posts to `$url`")
+    joinpath(output_dir, "timeline.png"); title="Posting timeline of feed `$url`")
+
+@info "Make all-post word cloud..."
+all_words = join([item.contents for item in fetched_items], " ")
+wordcloud_from_post(all_words, joinpath(output_dir, "wc-all.png"); colors=:Spectral_10)
+
+@info "Making per-post word clouds..."
+@showprogress for (i, item) in enumerate(sort(fetched_items; by=x -> x.date))
+    try
+        wordcloud_from_post(item.contents, joinpath(output_dir, "wc-$i.png"))
+    catch e
+        @info "Unable to generate word cloud plot for item $i" e
+    end
+end
+
+@info "Done!"
