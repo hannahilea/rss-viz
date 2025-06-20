@@ -18,7 +18,7 @@ No tests! No CI! No promised maintenance!
     1. Via commandline: 
         ```
         # first time only
-        julia --project=. -e 'using Pkg; Pkg.instantiate;'
+        julia --project=. -e 'using Pkg; Pkg.instantiate();'
 
         # every time, to run script
         julia --project=. run.jl
